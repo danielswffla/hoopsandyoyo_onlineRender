@@ -1,0 +1,10 @@
+{
+  "name": "FlashHYY",
+  "version": "1.0.0",
+  "description": "Raw TCP socket server for Flash 8 MMO",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}
