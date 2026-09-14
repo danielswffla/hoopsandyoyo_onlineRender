@@ -5,14 +5,18 @@ let clients = [];
 const server = net.createServer((socket) => {
     clients.push(socket);
     
-    socket.on('data', (data) => {
-        // Flash XMLSocket messages require a null terminator (\0) at the end
-        clients.forEach((client) => {
-            if (client !== socket) {
-                client.write(data);
-            }
-        });
+    // Inside server.js connection handler
+let clientId = Math.random().toString(36).substring(7);
+
+socket.on('data', (data) => {
+    // Parse or wrap the packet to include this client's unique ID
+    let packet = `<move id='${clientId}' data='${data.toString().trim()}' />`;
+    clients.forEach((client) => {
+        if (client !== socket) {
+            client.write(packet + "\0");
+        }
     });
+});
     
     socket.on('end', () => {
         clients = clients.filter(c => c !== socket);
