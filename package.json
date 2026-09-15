@@ -1,10 +1,11 @@
 {
-  "name": "FlashHYY",
+  "name": "hoopsandyoyo-onlinerender",
   "version": "1.0.0",
-  "description": "Raw TCP socket server for Flash 8 MMO",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
 }
