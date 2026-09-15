@@ -42,7 +42,11 @@ tcpServer.on("connection", (socket) => {
         y: 200,
 
         // Empty until the client sends its spawn.
-        username: ""
+        username: "",
+
+        // Character appearance state.
+        direction: "front",
+        walking: false
     };
 
     tcpClients.push(client);
@@ -79,7 +83,9 @@ tcpServer.on("connection", (socket) => {
             `id='${other.id}' ` +
             `x='${other.x}' ` +
             `y='${other.y}' ` +
-            `username='${escapeXml(other.username)}' />`
+            `username='${escapeXml(other.username)}' ` +
+            `direction='${escapeXml(other.direction)}' ` +
+            `walking='${other.walking ? "true" : "false"}' />`
         );
     }
 
@@ -142,6 +148,18 @@ tcpServer.on("connection", (socket) => {
                         "username"
                     );
 
+                const direction =
+                    getAttribute(
+                        cleanPacket,
+                        "direction"
+                    );
+
+                const walking =
+                    getAttribute(
+                        cleanPacket,
+                        "walking"
+                    );
+
 
                 // ==============================================
                 // POSITION
@@ -171,11 +189,37 @@ tcpServer.on("connection", (socket) => {
                 }
 
 
+                // ==============================================
+                // CHARACTER DIRECTION
+                // ==============================================
+
+                if (
+                    direction !== ""
+                ) {
+                    client.direction =
+                        decodeXml(direction);
+                }
+
+
+                // ==============================================
+                // CHARACTER WALKING
+                // ==============================================
+
+                if (
+                    walking !== ""
+                ) {
+                    client.walking =
+                        walking === "true";
+                }
+
+
                 console.log(
                     `[SPAWN] ` +
                     `${client.id} ` +
                     `username="${client.username}" ` +
-                    `position=${client.x},${client.y}`
+                    `position=${client.x},${client.y} ` +
+                    `direction="${client.direction}" ` +
+                    `walking=${client.walking}`
                 );
 
 
@@ -188,7 +232,9 @@ tcpServer.on("connection", (socket) => {
                     `id='${client.id}' ` +
                     `x='${client.x}' ` +
                     `y='${client.y}' ` +
-                    `username='${escapeXml(client.username)}' />`;
+                    `username='${escapeXml(client.username)}' ` +
+                    `direction='${escapeXml(client.direction)}' ` +
+                    `walking='${client.walking ? "true" : "false"}' />`;
 
 
                 console.log(
@@ -226,28 +272,90 @@ tcpServer.on("connection", (socket) => {
                         "y"
                     );
 
+                const direction =
+                    getAttribute(
+                        cleanPacket,
+                        "direction"
+                    );
+
+                const walking =
+                    getAttribute(
+                        cleanPacket,
+                        "walking"
+                    );
+
+
+                // ==============================================
+                // POSITION
+                // ==============================================
 
                 if (
                     x !== "" &&
                     y !== ""
                 ) {
-
                     client.x =
                         Number(x);
 
                     client.y =
                         Number(y);
-
-
-                    broadcastExcept(
-                        client,
-
-                        `<move ` +
-                        `id='${client.id}' ` +
-                        `x='${client.x}' ` +
-                        `y='${client.y}' />`
-                    );
                 }
+
+
+                // ==============================================
+                // DIRECTION
+                // ==============================================
+
+                if (
+                    direction !== ""
+                ) {
+                    client.direction =
+                        decodeXml(direction);
+                }
+
+
+                // ==============================================
+                // WALKING
+                // ==============================================
+
+                if (
+                    walking !== ""
+                ) {
+                    client.walking =
+                        walking === "true";
+                }
+
+
+                console.log(
+                    `[MOVE] ` +
+                    `${client.id} ` +
+                    `position=${client.x},${client.y} ` +
+                    `direction="${client.direction}" ` +
+                    `walking=${client.walking}`
+                );
+
+
+                // ==============================================
+                // BROADCAST
+                // ==============================================
+
+                const movePacket =
+                    `<move ` +
+                    `id='${client.id}' ` +
+                    `x='${client.x}' ` +
+                    `y='${client.y}' ` +
+                    `direction='${escapeXml(client.direction)}' ` +
+                    `walking='${client.walking ? "true" : "false"}' />`;
+
+
+                console.log(
+                    `[MOVE BROADCAST] ${movePacket}`
+                );
+
+
+                broadcastExcept(
+                    client,
+                    movePacket
+                );
 
 
                 continue;
