@@ -1,131 +1,222 @@
-const net = require("net");
+const http = require("http");
+const WebSocket = require("ws");
 
-const port = process.env.PORT || 10000;
+const PORT = Number(process.env.PORT) || 10000;
 
-const clients = new Map();
+const players = new Map();
 
 function makeId() {
-    return Math.random().toString(36).substring(2, 10);
+    return Math.random()
+        .toString(36)
+        .substring(2, 10);
 }
 
-function send(socket, xml) {
-    socket.write(xml + "\0");
+
+// ==================================================
+// HTTP SERVER
+// ==================================================
+
+const server = http.createServer((req, res) => {
+
+    res.writeHead(200, {
+        "Content-Type": "text/plain"
+    });
+
+    res.end(
+        "Hoops & Yoyo Multiplayer Server Online"
+    );
+});
+
+
+// ==================================================
+// WEBSOCKET SERVER
+// ==================================================
+
+const wss = new WebSocket.Server({
+    server: server
+});
+
+
+function send(ws, message) {
+
+    if (
+        ws.readyState === WebSocket.OPEN
+    ) {
+        ws.send(message);
+    }
 }
 
-function broadcast(xml, exceptSocket = null) {
-    for (const [socket] of clients) {
-        if (socket !== exceptSocket && !socket.destroyed) {
-            send(socket, xml);
+
+function broadcast(message, except) {
+
+    for (const client of wss.clients) {
+
+        if (
+            client !== except &&
+            client.readyState === WebSocket.OPEN
+        ) {
+            client.send(message);
         }
     }
 }
 
-const server = net.createServer((socket) => {
+
+// ==================================================
+// PLAYER CONNECTED
+// ==================================================
+
+wss.on("connection", (ws) => {
 
     const id = makeId();
 
     const player = {
         id: id,
-        socket: socket,
         x: 275,
         y: 200
     };
 
-    clients.set(socket, player);
+    players.set(ws, player);
 
-    console.log("Player connected:", id);
+    console.log(
+        "PLAYER CONNECTED:",
+        id
+    );
+
 
     // Give this client its ID.
+
     send(
-        socket,
+        ws,
         `<welcome id='${id}' />`
     );
 
-    // Tell this client about everyone already connected.
-    for (const [otherSocket, otherPlayer] of clients) {
 
-        if (otherSocket === socket) {
+    // Tell the new client about
+    // players already online.
+
+    for (const [otherWs, other] of players) {
+
+        if (otherWs === ws) {
             continue;
         }
 
         send(
-            socket,
-            `<spawn id='${otherPlayer.id}' x='${otherPlayer.x}' y='${otherPlayer.y}' />`
+            ws,
+            `<spawn id='${other.id}' x='${other.x}' y='${other.y}' />`
         );
     }
 
 
-    socket.on("data", (data) => {
+    // Tell everyone else about
+    // this new player.
 
-        const text = data.toString();
+    broadcast(
+        `<spawn id='${id}' x='${player.x}' y='${player.y}' />`,
+        ws
+    );
 
-        // XMLSocket can potentially give us multiple packets.
-        const packets = text.split("\0");
 
-        for (let packet of packets) {
+    // ==================================================
+    // DATA
+    // ==================================================
 
-            packet = packet.trim();
+    ws.on("message", (message) => {
 
-            if (!packet) {
-                continue;
+        const data =
+            message.toString();
+
+        console.log(
+            "FROM",
+            id,
+            ":",
+            data
+        );
+
+
+        // ----------------------------------------------
+        // SPAWN
+        // ----------------------------------------------
+
+        if (
+            data.indexOf("<spawn") === 0
+        ) {
+
+            const xMatch =
+                data.match(/x=['"]([^'"]+)['"]/);
+
+            const yMatch =
+                data.match(/y=['"]([^'"]+)['"]/);
+
+
+            if (xMatch) {
+                player.x =
+                    Number(xMatch[1]);
             }
 
-            console.log("Received from", id, ":", packet);
-
-            // ----------------------------------------
-            // SPAWN
-            // ----------------------------------------
-
-            if (packet.indexOf("<spawn") === 0) {
-
-                const xMatch = packet.match(/x=['"]([^'"]+)['"]/);
-                const yMatch = packet.match(/y=['"]([^'"]+)['"]/);
-
-                if (xMatch) {
-                    player.x = Number(xMatch[1]);
-                }
-
-                if (yMatch) {
-                    player.y = Number(yMatch[1]);
-                }
-
-                broadcast(
-                    `<spawn id='${player.id}' x='${player.x}' y='${player.y}' />`,
-                    socket
-                );
+            if (yMatch) {
+                player.y =
+                    Number(yMatch[1]);
             }
 
-            // ----------------------------------------
-            // MOVE
-            // ----------------------------------------
 
-            else if (packet.indexOf("<move") === 0) {
+            broadcast(
+                `<spawn id='${id}' x='${player.x}' y='${player.y}' />`,
+                ws
+            );
 
-                const xMatch = packet.match(/x=['"]([^'"]+)['"]/);
-                const yMatch = packet.match(/y=['"]([^'"]+)['"]/);
-
-                if (xMatch) {
-                    player.x = Number(xMatch[1]);
-                }
-
-                if (yMatch) {
-                    player.y = Number(yMatch[1]);
-                }
-
-                broadcast(
-                    `<move id='${player.id}' x='${player.x}' y='${player.y}' />`,
-                    socket
-                );
-            }
+            return;
         }
+
+
+        // ----------------------------------------------
+        // MOVE
+        // ----------------------------------------------
+
+        if (
+            data.indexOf("<move") === 0
+        ) {
+
+            const xMatch =
+                data.match(/x=['"]([^'"]+)['"]/);
+
+            const yMatch =
+                data.match(/y=['"]([^'"]+)['"]/);
+
+
+            if (xMatch) {
+                player.x =
+                    Number(xMatch[1]);
+            }
+
+            if (yMatch) {
+                player.y =
+                    Number(yMatch[1]);
+            }
+
+
+            broadcast(
+                `<move id='${id}' x='${player.x}' y='${player.y}' />`,
+                ws
+            );
+
+            return;
+        }
+
     });
 
 
-    socket.on("close", () => {
+    // ==================================================
+    // DISCONNECTED
+    // ==================================================
 
-        console.log("Player disconnected:", id);
+    ws.on("close", () => {
 
-        clients.delete(socket);
+        console.log(
+            "PLAYER DISCONNECTED:",
+            id
+        );
+
+        players.delete(ws);
 
         broadcast(
             `<leave id='${id}' />`
@@ -133,15 +224,31 @@ const server = net.createServer((socket) => {
     });
 
 
-    socket.on("error", (err) => {
-        console.log("Socket error:", err.message);
+    ws.on("error", (error) => {
+
+        console.log(
+            "WebSocket error:",
+            error.message
+        );
+
     });
 
 });
 
 
-server.listen(port, () => {
-    console.log(
-        "Raw TCP Socket server listening on port " + port
-    );
-});
+// ==================================================
+// START
+// ==================================================
+
+server.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+
+        console.log(
+            "Hoops & Yoyo server listening on port " +
+            PORT
+        );
+
+    }
+);
