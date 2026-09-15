@@ -1,617 +1,523 @@
-// Coded by danielswf.
+const http = require("http");
+const net = require("net");
+const { WebSocketServer } = require("ws");
 
-import flash.external.ExternalInterface;
-
-
-// ==================================================
-// DEBUGGING
-// ==================================================
-
-function debug(message:String):Void
-{
-    trace(message);
-
-    // Send trace to browser DevTools console.
-    if (ExternalInterface.available)
-    {
-        try
-        {
-            ExternalInterface.call(
-                "console.log",
-                "[Hoops & Yoyo] " + message
-            );
-        }
-        catch (e)
-        {
-            // ExternalInterface failed.
-        }
-    }
-}
+const PORT = Number(process.env.PORT) || 10000;
+const TCP_PORT = 10001;
 
 
-// ==================================================
-// SOCKET
-// ==================================================
+// ============================================================
+// HTTP SERVER
+// ============================================================
 
-var mySocket:XMLSocket = new XMLSocket();
+const httpServer = http.createServer((req, res) => {
+    res.writeHead(200, {
+        "Content-Type": "text/plain"
+    });
 
-var isConnected:Boolean = false;
-
-var serverHost:String =
-    "hoopsandyoyo-onlinerender.onrender.com";
-
-var serverPort:Number = 10000;
-
-
-// ==================================================
-// PLAYERS
-// ==================================================
-
-var player:MovieClip;
-
-var myPlayerId:String = "";
-
-var otherPlayers:Object = {};
+    res.end("Hoops & Yoyo Multiplayer Server Online");
+});
 
 
-// ==================================================
-// START
-// ==================================================
+// ============================================================
+// TCP MULTIPLAYER SERVER
+// ============================================================
 
-debug("======================================");
-debug("HOOPS & YOYO MULTIPLAYER STARTING");
-debug("======================================");
+const tcpServer = net.createServer();
 
-debug("Server: " + serverHost);
-debug("Port: " + serverPort);
+const tcpClients = [];
 
-debug("XMLSocket created.");
+tcpServer.on("connection", (socket) => {
 
+    const clientId =
+        Math.random()
+            .toString(36)
+            .substring(2, 10);
 
-// ==================================================
-// CONNECT
-// ==================================================
+    const client = {
+        socket: socket,
+        id: clientId,
+        x: 275,
+        y: 200,
+        username: "Guest"
+    };
 
-mySocket.onConnect = function(success:Boolean):Void
-{
-    debug("XMLSocket onConnect fired.");
-    debug("Connection result: " + success);
+    tcpClients.push(client);
 
-    if (success)
-    {
-        isConnected = true;
-
-        debug("CONNECTED TO SERVER!");
-
-        // --------------------------------------------------
-        // Spawn our local player immediately.
-        // Don't wait for the server.
-        // --------------------------------------------------
-
-        spawnLocalPlayer();
-
-        // --------------------------------------------------
-        // Tell server our starting position.
-        // --------------------------------------------------
-
-        var spawnPacket:String =
-            "<spawn x='275' y='200' />";
-
-        debug("Sending: " + spawnPacket);
-
-        mySocket.send(spawnPacket);
-    }
-    else
-    {
-        isConnected = false;
-
-        debug("FAILED TO CONNECT TO SERVER.");
-    }
-};
-
-
-// ==================================================
-// CLOSE
-// ==================================================
-
-mySocket.onClose = function():Void
-{
-    isConnected = false;
-
-    debug("XMLSocket connection CLOSED.");
-};
-
-
-// ==================================================
-// DATA RECEIVED
-// ==================================================
-
-mySocket.onData = function(data:String):Void
-{
-    debug("SERVER RECEIVED:");
-    debug(data);
-
-    data = data.split("\0").join("");
-
-    if (data == "")
-    {
-        return;
-    }
-
-
-    // ==================================================
-    // WELCOME
-    // ==================================================
-
-    if (data.indexOf("<welcome") == 0)
-{
-    debug("Received WELCOME packet.");
-
-    var idStart:Number =
-        data.indexOf("id='") + 4;
-
-    var idEnd:Number =
-        data.indexOf("'", idStart);
-
-    if (idStart >= 4 && idEnd > idStart)
-    {
-        myPlayerId =
-            data.substring(idStart, idEnd);
-
-        debug(
-            "My player ID = " +
-            myPlayerId
-        );
-    }
-
-    // ================================================
-    // SPAWN LOCAL CHARACTER
-    // ================================================
-
-    spawnLocalPlayer();
-
-    // ================================================
-    // SEND USERNAME + POSITION
-    // ================================================
-
-    var spawnPacket:String =
-        "<spawn x='275' y='200' username='" +
-        _root.playerUsername +
-        "' />";
-
-    debug(
-        "Sending spawn: " +
-        spawnPacket
+    console.log(
+        `[TCP] Player connected: ${clientId}`
     );
 
-    mySocket.send(spawnPacket);
 
-    return;
+    // ========================================================
+    // WELCOME
+    // ========================================================
+
+    sendPacket(
+        socket,
+        `<welcome id='${clientId}' />`
+    );
+
+
+    // ========================================================
+    // SEND EXISTING PLAYERS TO NEW PLAYER
+    // ========================================================
+
+    for (const other of tcpClients) {
+
+        if (other === client) {
+            continue;
+        }
+
+        sendPacket(
+            socket,
+            `<spawn id='${other.id}' x='${other.x}' y='${other.y}' username='${escapeXml(other.username)}' />`
+        );
+    }
+
+
+    // ========================================================
+    // RECEIVE DATA
+    // ========================================================
+
+    let buffer = "";
+
+    socket.on("data", (data) => {
+
+        buffer += data.toString();
+
+        const packets = buffer.split("\0");
+
+        buffer = packets.pop();
+
+
+        for (const packet of packets) {
+
+            const cleanPacket = packet.trim();
+
+            if (cleanPacket === "") {
+                continue;
+            }
+
+            console.log(
+                `[${client.id}] ${cleanPacket}`
+            );
+
+
+            // ==================================================
+            // SPAWN
+            // ==================================================
+
+            if (cleanPacket.indexOf("<spawn") === 0) {
+
+                const x =
+                    getAttribute(
+                        cleanPacket,
+                        "x"
+                    );
+
+                const y =
+                    getAttribute(
+                        cleanPacket,
+                        "y"
+                    );
+
+                const username =
+                    getAttribute(
+                        cleanPacket,
+                        "username"
+                    );
+
+
+                if (x !== "" && y !== "") {
+
+                    client.x = Number(x);
+                    client.y = Number(y);
+                }
+
+
+                if (username !== "") {
+
+                    client.username =
+                        username;
+                }
+
+
+                console.log(
+                    `[SPAWN] ${client.id} = "${client.username}" at ${client.x}, ${client.y}`
+                );
+
+
+                // Tell everyone else about this player.
+                broadcastExcept(
+                    client,
+                    `<spawn id='${client.id}' x='${client.x}' y='${client.y}' username='${escapeXml(client.username)}' />`
+                );
+
+                continue;
+            }
+
+
+            // ==================================================
+            // MOVE
+            // ==================================================
+
+            if (cleanPacket.indexOf("<move") === 0) {
+
+                const x =
+                    getAttribute(
+                        cleanPacket,
+                        "x"
+                    );
+
+                const y =
+                    getAttribute(
+                        cleanPacket,
+                        "y"
+                    );
+
+
+                if (x !== "" && y !== "") {
+
+                    client.x = Number(x);
+                    client.y = Number(y);
+
+
+                    broadcastExcept(
+                        client,
+                        `<move id='${client.id}' x='${client.x}' y='${client.y}' />`
+                    );
+                }
+
+                continue;
+            }
+        }
+    });
+
+
+    // ========================================================
+    // DISCONNECT
+    // ========================================================
+
+    socket.on("close", () => {
+
+        if (removeClient(client)) {
+
+            console.log(
+                `[TCP] Player disconnected: ${client.id}`
+            );
+
+            broadcast(
+                `<leave id='${client.id}' />`
+            );
+        }
+    });
+
+
+    socket.on("end", () => {
+
+        if (removeClient(client)) {
+
+            console.log(
+                `[TCP] Player ended: ${client.id}`
+            );
+
+            broadcast(
+                `<leave id='${client.id}' />`
+            );
+        }
+    });
+
+
+    socket.on("error", (err) => {
+
+        console.log(
+            `[TCP] ${client.id} error: ${err.message}`
+        );
+
+        removeClient(client);
+    });
+});
+
+
+// ============================================================
+// INTERNAL TCP SERVER
+// ============================================================
+
+tcpServer.listen(
+    TCP_PORT,
+    "127.0.0.1",
+    () => {
+
+        console.log(
+            `[TCP] Internal multiplayer server listening on ${TCP_PORT}`
+        );
+    }
+);
+
+
+// ============================================================
+// WEBSOCKET PROXY
+// ============================================================
+
+const wss = new WebSocketServer({
+    server: httpServer
+});
+
+wss.on("connection", (ws) => {
+
+    console.log(
+        "[WS] Ruffle socket connected"
+    );
+
+
+    const tcp =
+        net.createConnection({
+            host: "127.0.0.1",
+            port: TCP_PORT
+        });
+
+
+    // ========================================================
+    // TCP -> WEBSOCKET
+    // ========================================================
+
+    tcp.on("data", (data) => {
+
+        if (ws.readyState === ws.OPEN) {
+
+            ws.send(data);
+        }
+    });
+
+
+    // ========================================================
+    // WEBSOCKET -> TCP
+    // ========================================================
+
+    ws.on("message", (data) => {
+
+        if (tcp.writable) {
+
+            tcp.write(
+                Buffer.from(data)
+            );
+        }
+    });
+
+
+    // ========================================================
+    // WEBSOCKET CLOSE
+    // ========================================================
+
+    ws.on("close", () => {
+
+        console.log(
+            "[WS] Ruffle disconnected"
+        );
+
+        tcp.destroy();
+    });
+
+
+    ws.on("error", (err) => {
+
+        console.log(
+            `[WS] Error: ${err.message}`
+        );
+
+        tcp.destroy();
+    });
+
+
+    tcp.on("error", (err) => {
+
+        console.log(
+            `[Proxy] TCP error: ${err.message}`
+        );
+
+        try {
+            ws.close();
+        }
+        catch (e) {}
+    });
+
+
+    tcp.on("close", () => {
+
+        try {
+            ws.close();
+        }
+        catch (e) {}
+    });
+});
+
+
+// ============================================================
+// PUBLIC SERVER
+// ============================================================
+
+httpServer.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+
+        console.log(
+            `Hoops & Yoyo server listening on ${PORT}`
+        );
+    }
+);
+
+
+// ============================================================
+// SEND PACKET
+// ============================================================
+
+function sendPacket(socket, packet) {
+
+    if (!socket.destroyed) {
+
+        socket.write(
+            packet + "\0"
+        );
+
+        console.log(
+            `[SEND] ${packet}`
+        );
+    }
 }
 
 
-    // ==================================================
-    // SPAWN
-    // ==================================================
+// ============================================================
+// BROADCAST
+// ============================================================
 
-    if (data.indexOf("<spawn") == 0)
-    {
-        debug("Received SPAWN packet.");
+function broadcast(packet) {
 
-        var spawnId:String =
-            getAttribute(data, "id");
+    for (const client of tcpClients) {
 
-        var spawnX:Number =
-            Number(getAttribute(data, "x"));
+        sendPacket(
+            client.socket,
+            packet
+        );
+    }
+}
 
-        var spawnY:Number =
-            Number(getAttribute(data, "y"));
 
-        debug(
-            "Spawn ID: " +
-            spawnId +
-            " X: " +
-            spawnX +
-            " Y: " +
-            spawnY
+// ============================================================
+// BROADCAST EXCEPT
+// ============================================================
+
+function broadcastExcept(except, packet) {
+
+    for (const client of tcpClients) {
+
+        if (client === except) {
+            continue;
+        }
+
+        sendPacket(
+            client.socket,
+            packet
+        );
+    }
+}
+
+
+// ============================================================
+// REMOVE CLIENT
+// ============================================================
+
+function removeClient(client) {
+
+    const index =
+        tcpClients.indexOf(client);
+
+    if (index !== -1) {
+
+        tcpClients.splice(
+            index,
+            1
         );
 
-        if (
-            spawnId != "" &&
-            spawnId != myPlayerId
-        )
-        {
-            spawnOtherPlayer(
-                spawnId,
-                spawnX,
-                spawnY
-            );
-        }
-
-        return;
+        return true;
     }
 
-
-    // ==================================================
-    // MOVE
-    // ==================================================
-
-    if (data.indexOf("<move") == 0)
-    {
-        debug("Received MOVE packet.");
-
-        var moveId:String =
-            getAttribute(data, "id");
-
-        var moveX:Number =
-            Number(getAttribute(data, "x"));
-
-        var moveY:Number =
-            Number(getAttribute(data, "y"));
-
-        debug(
-            "Move ID: " +
-            moveId +
-            " X: " +
-            moveX +
-            " Y: " +
-            moveY
-        );
-
-        if (moveId != myPlayerId)
-        {
-            if (otherPlayers[moveId] != undefined)
-            {
-                otherPlayers[moveId]._x = moveX;
-                otherPlayers[moveId]._y = moveY;
-            }
-            else
-            {
-                // Player doesn't exist yet.
-                // Spawn them automatically.
-                spawnOtherPlayer(
-                    moveId,
-                    moveX,
-                    moveY
-                );
-            }
-        }
-
-        return;
-    }
+    return false;
+}
 
 
-    // ==================================================
-    // LEAVE
-    // ==================================================
+// ============================================================
+// XML ATTRIBUTE
+// ============================================================
 
-    if (data.indexOf("<leave") == 0)
-    {
-        debug("Received LEAVE packet.");
+function getAttribute(text, attribute) {
 
-        var leaveId:String =
-            getAttribute(data, "id");
-
-        if (
-            leaveId != "" &&
-            otherPlayers[leaveId] != undefined
-        )
-        {
-            otherPlayers[leaveId].removeMovieClip();
-
-            delete otherPlayers[leaveId];
-
-            debug(
-                "Removed player: " +
-                leaveId
-            );
-        }
-
-        return;
-    }
-
-
-    debug("Unknown packet received.");
-};
-
-
-// ==================================================
-// XML ATTRIBUTE HELPER
-// ==================================================
-
-function getAttribute(
-    text:String,
-    attribute:String
-):String
-{
-    var search:String =
+    let search =
         attribute + "='";
 
-    var start:Number =
+    let start =
         text.indexOf(search);
 
-    if (start < 0)
-    {
-        // Also support double quotes.
-        search =
-            attribute + "=\"";
 
-        start =
-            text.indexOf(search);
+    // Single quotes
 
-        if (start < 0)
-        {
-            return "";
-        }
+    if (start >= 0) {
 
         start += search.length;
 
-        var endDouble:Number =
-            text.indexOf("\"", start);
+        const end =
+            text.indexOf("'", start);
 
-        if (endDouble < 0)
-        {
-            return "";
-        }
+        if (end >= 0) {
 
-        return text.substring(
-            start,
-            endDouble
-        );
-    }
-
-    start += search.length;
-
-    var end:Number =
-        text.indexOf("'", start);
-
-    if (end < 0)
-    {
-        return "";
-    }
-
-    return text.substring(
-        start,
-        end
-    );
-}
-
-
-// ==================================================
-// LOCAL PLAYER
-// ==================================================
-
-function spawnLocalPlayer():Void
-{
-    if (player != undefined)
-    {
-        debug("Local player already exists.");
-        return;
-    }
-
-    debug("Attempting to spawn local player...");
-
-    player = _root.attachMovie(
-        "CharacterPlayerMC",
-        "player_mc",
-        _root.getNextHighestDepth()
-    );
-
-    if (player == undefined)
-    {
-        debug("ERROR: attachMovie FAILED!");
-        return;
-    }
-
-    player._x = 275;
-    player._y = 200;
-
-    // ================================================
-    // SET USERNAME
-    // ================================================
-
-    if (
-        player.userName != undefined &&
-        _root.playerUsername != undefined
-    )
-    {
-        player.userName.text =
-            _root.playerUsername;
-    }
-
-    debug(
-        "LOCAL PLAYER SPAWNED!"
-    );
-
-    debug(
-        "Username: " +
-        _root.playerUsername
-    );
-
-    debug(
-        "Player object: " +
-        player
-    );
-}
-
-
-// ==================================================
-// OTHER PLAYER
-// ==================================================
-
-function spawnOtherPlayer(
-    id:String,
-    x:Number,
-    y:Number
-):Void
-{
-    if (id == "")
-    {
-        debug(
-            "Cannot spawn player with empty ID."
-        );
-
-        return;
-    }
-
-    if (otherPlayers[id] != undefined)
-    {
-        debug(
-            "Player already exists: " +
-            id
-        );
-
-        return;
-    }
-
-    var name:String =
-        "player_" + id;
-
-    debug(
-        "Spawning remote player: " +
-        id
-    );
-
-    var p:MovieClip =
-        _root.attachMovie(
-            "CharacterPlayerMC",
-            name,
-            _root.getNextHighestDepth()
-        );
-
-    if (p == undefined)
-    {
-        debug(
-            "ERROR: Failed to spawn remote player " +
-            id
-        );
-
-        return;
-    }
-
-    p._x = x;
-    p._y = y;
-
-    otherPlayers[id] = p;
-
-    debug(
-        "REMOTE PLAYER SPAWNED: " +
-        id
-    );
-}
-
-
-// ==================================================
-// MOVEMENT
-// ==================================================
-
-var walkSpeed:Number = 6;
-
-_root.onMouseDown = function():Void
-{
-    if (player == undefined)
-    {
-        debug(
-            "Cannot move: local player doesn't exist."
-        );
-
-        return;
-    }
-
-    player.targetX =
-        _root._xmouse;
-
-    player.targetY =
-        _root._ymouse;
-
-
-    // ==================================================
-    // SEND MOVEMENT
-    // ==================================================
-
-    if (
-        mySocket != undefined &&
-        isConnected
-    )
-    {
-        var movePacket:String =
-            "<move x='" +
-            player.targetX +
-            "' y='" +
-            player.targetY +
-            "' />";
-
-        debug(
-            "Sending: " +
-            movePacket
-        );
-
-        mySocket.send(movePacket);
-    }
-    else
-    {
-        debug(
-            "NOT CONNECTED - movement not sent."
-        );
-    }
-
-
-    // ==================================================
-    // LOCAL MOVEMENT
-    // ==================================================
-
-    player.onEnterFrame = function():Void
-    {
-        var dx:Number =
-            this.targetX - this._x;
-
-        var dy:Number =
-            this.targetY - this._y;
-
-        var dist:Number =
-            Math.sqrt(
-                dx * dx +
-                dy * dy
+            return text.substring(
+                start,
+                end
             );
-
-
-        if (dist > walkSpeed)
-        {
-            this._x +=
-                (dx / dist) *
-                walkSpeed;
-
-            this._y +=
-                (dy / dist) *
-                walkSpeed;
         }
-        else
-        {
-            this._x =
-                this.targetX;
+    }
 
-            this._y =
-                this.targetY;
 
-            delete this.onEnterFrame;
+    // Double quotes
+
+    search =
+        attribute + '="';
+
+    start =
+        text.indexOf(search);
+
+
+    if (start >= 0) {
+
+        start += search.length;
+
+        const end =
+            text.indexOf('"', start);
+
+        if (end >= 0) {
+
+            return text.substring(
+                start,
+                end
+            );
         }
-    };
-};
+    }
 
 
-// ==================================================
-// CONNECT TO SERVER
-// ==================================================
+    return "";
+}
 
-debug(
-    "Calling XMLSocket.connect()..."
-);
 
-mySocket.connect(
-    serverHost,
-    serverPort
-);
+// ============================================================
+// ESCAPE XML
+// ============================================================
 
-debug(
-    "XMLSocket.connect() called."
-);
+function escapeXml(text) {
+
+    return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/'/g, "&apos;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
