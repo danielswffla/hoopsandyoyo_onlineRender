@@ -37,9 +37,12 @@ tcpServer.on("connection", (socket) => {
     const client = {
         socket: socket,
         id: clientId,
+
         x: 275,
         y: 200,
-        username: "Guest"
+
+        // Empty until the client sends its spawn.
+        username: ""
     };
 
     tcpClients.push(client);
@@ -60,7 +63,7 @@ tcpServer.on("connection", (socket) => {
 
 
     // ========================================================
-    // SEND EXISTING PLAYERS TO NEW PLAYER
+    // SEND EXISTING PLAYERS
     // ========================================================
 
     for (const other of tcpClients) {
@@ -71,7 +74,12 @@ tcpServer.on("connection", (socket) => {
 
         sendPacket(
             socket,
-            `<spawn id='${other.id}' x='${other.x}' y='${other.y}' username='${escapeXml(other.username)}' />`
+
+            `<spawn ` +
+            `id='${other.id}' ` +
+            `x='${other.x}' ` +
+            `y='${other.y}' ` +
+            `username='${escapeXml(other.username)}' />`
         );
     }
 
@@ -86,18 +94,22 @@ tcpServer.on("connection", (socket) => {
 
         buffer += data.toString();
 
-        const packets = buffer.split("\0");
+        const packets =
+            buffer.split("\0");
 
-        buffer = packets.pop();
+        buffer =
+            packets.pop();
 
 
         for (const packet of packets) {
 
-            const cleanPacket = packet.trim();
+            const cleanPacket =
+                packet.trim();
 
             if (cleanPacket === "") {
                 continue;
             }
+
 
             console.log(
                 `[${client.id}] ${cleanPacket}`
@@ -108,7 +120,9 @@ tcpServer.on("connection", (socket) => {
             // SPAWN
             // ==================================================
 
-            if (cleanPacket.indexOf("<spawn") === 0) {
+            if (
+                cleanPacket.indexOf("<spawn") === 0
+            ) {
 
                 const x =
                     getAttribute(
@@ -129,30 +143,64 @@ tcpServer.on("connection", (socket) => {
                     );
 
 
-                if (x !== "" && y !== "") {
+                // ==============================================
+                // POSITION
+                // ==============================================
 
-                    client.x = Number(x);
-                    client.y = Number(y);
+                if (
+                    x !== "" &&
+                    y !== ""
+                ) {
+                    client.x =
+                        Number(x);
+
+                    client.y =
+                        Number(y);
                 }
 
 
-                if (username !== "") {
+                // ==============================================
+                // USERNAME
+                // ==============================================
 
+                if (
+                    username !== ""
+                ) {
                     client.username =
-                        username;
+                        decodeXml(username);
                 }
 
 
                 console.log(
-                    `[SPAWN] ${client.id} = "${client.username}" at ${client.x}, ${client.y}`
+                    `[SPAWN] ` +
+                    `${client.id} ` +
+                    `username="${client.username}" ` +
+                    `position=${client.x},${client.y}`
                 );
 
 
-                // Tell everyone else about this player.
+                // ==============================================
+                // BROADCAST
+                // ==============================================
+
+                const spawnPacket =
+                    `<spawn ` +
+                    `id='${client.id}' ` +
+                    `x='${client.x}' ` +
+                    `y='${client.y}' ` +
+                    `username='${escapeXml(client.username)}' />`;
+
+
+                console.log(
+                    `[SPAWN BROADCAST] ${spawnPacket}`
+                );
+
+
                 broadcastExcept(
                     client,
-                    `<spawn id='${client.id}' x='${client.x}' y='${client.y}' username='${escapeXml(client.username)}' />`
+                    spawnPacket
                 );
+
 
                 continue;
             }
@@ -162,7 +210,9 @@ tcpServer.on("connection", (socket) => {
             // MOVE
             // ==================================================
 
-            if (cleanPacket.indexOf("<move") === 0) {
+            if (
+                cleanPacket.indexOf("<move") === 0
+            ) {
 
                 const x =
                     getAttribute(
@@ -177,17 +227,28 @@ tcpServer.on("connection", (socket) => {
                     );
 
 
-                if (x !== "" && y !== "") {
+                if (
+                    x !== "" &&
+                    y !== ""
+                ) {
 
-                    client.x = Number(x);
-                    client.y = Number(y);
+                    client.x =
+                        Number(x);
+
+                    client.y =
+                        Number(y);
 
 
                     broadcastExcept(
                         client,
-                        `<move id='${client.id}' x='${client.x}' y='${client.y}' />`
+
+                        `<move ` +
+                        `id='${client.id}' ` +
+                        `x='${client.x}' ` +
+                        `y='${client.y}' />`
                     );
                 }
+
 
                 continue;
             }
@@ -201,7 +262,9 @@ tcpServer.on("connection", (socket) => {
 
     socket.on("close", () => {
 
-        if (removeClient(client)) {
+        if (
+            removeClient(client)
+        ) {
 
             console.log(
                 `[TCP] Player disconnected: ${client.id}`
@@ -216,7 +279,9 @@ tcpServer.on("connection", (socket) => {
 
     socket.on("end", () => {
 
-        if (removeClient(client)) {
+        if (
+            removeClient(client)
+        ) {
 
             console.log(
                 `[TCP] Player ended: ${client.id}`
@@ -260,9 +325,11 @@ tcpServer.listen(
 // WEBSOCKET PROXY
 // ============================================================
 
-const wss = new WebSocketServer({
-    server: httpServer
-});
+const wss =
+    new WebSocketServer({
+        server: httpServer
+    });
+
 
 wss.on("connection", (ws) => {
 
@@ -284,7 +351,9 @@ wss.on("connection", (ws) => {
 
     tcp.on("data", (data) => {
 
-        if (ws.readyState === ws.OPEN) {
+        if (
+            ws.readyState === ws.OPEN
+        ) {
 
             ws.send(data);
         }
@@ -297,7 +366,9 @@ wss.on("connection", (ws) => {
 
     ws.on("message", (data) => {
 
-        if (tcp.writable) {
+        if (
+            tcp.writable
+        ) {
 
             tcp.write(
                 Buffer.from(data)
@@ -375,7 +446,9 @@ httpServer.listen(
 
 function sendPacket(socket, packet) {
 
-    if (!socket.destroyed) {
+    if (
+        !socket.destroyed
+    ) {
 
         socket.write(
             packet + "\0"
@@ -394,7 +467,9 @@ function sendPacket(socket, packet) {
 
 function broadcast(packet) {
 
-    for (const client of tcpClients) {
+    for (
+        const client of tcpClients
+    ) {
 
         sendPacket(
             client.socket,
@@ -408,11 +483,18 @@ function broadcast(packet) {
 // BROADCAST EXCEPT
 // ============================================================
 
-function broadcastExcept(except, packet) {
+function broadcastExcept(
+    except,
+    packet
+) {
 
-    for (const client of tcpClients) {
+    for (
+        const client of tcpClients
+    ) {
 
-        if (client === except) {
+        if (
+            client === except
+        ) {
             continue;
         }
 
@@ -433,7 +515,9 @@ function removeClient(client) {
     const index =
         tcpClients.indexOf(client);
 
-    if (index !== -1) {
+    if (
+        index !== -1
+    ) {
 
         tcpClients.splice(
             index,
@@ -451,7 +535,10 @@ function removeClient(client) {
 // XML ATTRIBUTE
 // ============================================================
 
-function getAttribute(text, attribute) {
+function getAttribute(
+    text,
+    attribute
+) {
 
     let search =
         attribute + "='";
@@ -461,15 +548,22 @@ function getAttribute(text, attribute) {
 
 
     // Single quotes
+    if (
+        start >= 0
+    ) {
 
-    if (start >= 0) {
-
-        start += search.length;
+        start +=
+            search.length;
 
         const end =
-            text.indexOf("'", start);
+            text.indexOf(
+                "'",
+                start
+            );
 
-        if (end >= 0) {
+        if (
+            end >= 0
+        ) {
 
             return text.substring(
                 start,
@@ -480,7 +574,6 @@ function getAttribute(text, attribute) {
 
 
     // Double quotes
-
     search =
         attribute + '="';
 
@@ -488,14 +581,22 @@ function getAttribute(text, attribute) {
         text.indexOf(search);
 
 
-    if (start >= 0) {
+    if (
+        start >= 0
+    ) {
 
-        start += search.length;
+        start +=
+            search.length;
 
         const end =
-            text.indexOf('"', start);
+            text.indexOf(
+                '"',
+                start
+            );
 
-        if (end >= 0) {
+        if (
+            end >= 0
+        ) {
 
             return text.substring(
                 start,
@@ -520,4 +621,19 @@ function escapeXml(text) {
         .replace(/'/g, "&apos;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;");
+}
+
+
+// ============================================================
+// DECODE XML
+// ============================================================
+
+function decodeXml(text) {
+
+    return String(text)
+        .replace(/&apos;/g, "'")
+        .replace(/&gt;/g, ">")
+        .replace(/&lt;/g, "<")
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, "&");
 }
