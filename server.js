@@ -1,254 +1,463 @@
 const http = require("http");
-const WebSocket = require("ws");
+const net = require("net");
+const { WebSocketServer } = require("ws");
 
 const PORT = Number(process.env.PORT) || 10000;
 
-const players = new Map();
-
-function makeId() {
-    return Math.random()
-        .toString(36)
-        .substring(2, 10);
-}
-
-
-// ==================================================
+// ============================================================
 // HTTP SERVER
-// ==================================================
+// ============================================================
 
-const server = http.createServer((req, res) => {
-
+const httpServer = http.createServer((req, res) => {
     res.writeHead(200, {
         "Content-Type": "text/plain"
     });
 
-    res.end(
-        "Hoops & Yoyo Multiplayer Server Online"
-    );
+    res.end("Hoops & Yoyo Multiplayer Server Online");
 });
 
 
-// ==================================================
-// WEBSOCKET SERVER
-// ==================================================
+// ============================================================
+// RAW TCP GAME SERVER
+//
+// This is the actual XMLSocket-style multiplayer server.
+// It stays private inside Render.
+// ============================================================
 
-const wss = new WebSocket.Server({
-    server: server
-});
+const TCP_PORT = 10001;
 
+const tcpServer = net.createServer();
 
-function send(ws, message) {
+const tcpClients = [];
 
-    if (
-        ws.readyState === WebSocket.OPEN
-    ) {
-        ws.send(message);
-    }
-}
+tcpServer.on("connection", (socket) => {
 
+    const clientId =
+        Math.random()
+            .toString(36)
+            .substring(2, 10);
 
-function broadcast(message, except) {
-
-    for (const client of wss.clients) {
-
-        if (
-            client !== except &&
-            client.readyState === WebSocket.OPEN
-        ) {
-            client.send(message);
-        }
-    }
-}
-
-
-// ==================================================
-// PLAYER CONNECTED
-// ==================================================
-
-wss.on("connection", (ws) => {
-
-    const id = makeId();
-
-    const player = {
-        id: id,
+    const client = {
+        socket: socket,
+        id: clientId,
         x: 275,
         y: 200
     };
 
-    players.set(ws, player);
+    tcpClients.push(client);
 
     console.log(
-        "PLAYER CONNECTED:",
-        id
+        `[TCP] Player connected: ${clientId}`
     );
 
 
-    // Give this client its ID.
+    // ========================================================
+    // SEND WELCOME
+    // ========================================================
 
-    send(
-        ws,
-        `<welcome id='${id}' />`
+    sendPacket(
+        socket,
+        `<welcome id='${clientId}' />`
     );
 
 
-    // Tell the new client about
-    // players already online.
+    // ========================================================
+    // TELL NEW PLAYER ABOUT EXISTING PLAYERS
+    // ========================================================
 
-    for (const [otherWs, other] of players) {
+    for (const other of tcpClients) {
 
-        if (otherWs === ws) {
+        if (other === client) {
             continue;
         }
 
-        send(
-            ws,
+        sendPacket(
+            socket,
             `<spawn id='${other.id}' x='${other.x}' y='${other.y}' />`
         );
     }
 
 
-    // Tell everyone else about
-    // this new player.
+    // ========================================================
+    // TELL EVERYONE ELSE ABOUT NEW PLAYER
+    // ========================================================
 
-    broadcast(
-        `<spawn id='${id}' x='${player.x}' y='${player.y}' />`,
-        ws
+    broadcastExcept(
+        client,
+        `<spawn id='${client.id}' x='${client.x}' y='${client.y}' />`
     );
 
 
-    // ==================================================
-    // DATA
-    // ==================================================
+    // ========================================================
+    // RECEIVE DATA
+    // ========================================================
 
-    ws.on("message", (message) => {
+    let buffer = "";
 
-        const data =
-            message.toString();
+    socket.on("data", (data) => {
 
-        console.log(
-            "FROM",
-            id,
-            ":",
-            data
-        );
+        buffer += data.toString();
 
+        // XMLSocket packets are terminated by NULL.
+        const packets = buffer.split("\0");
 
-        // ----------------------------------------------
-        // SPAWN
-        // ----------------------------------------------
-
-        if (
-            data.indexOf("<spawn") === 0
-        ) {
-
-            const xMatch =
-                data.match(/x=['"]([^'"]+)['"]/);
-
-            const yMatch =
-                data.match(/y=['"]([^'"]+)['"]/);
+        // Keep incomplete packet.
+        buffer = packets.pop();
 
 
-            if (xMatch) {
-                player.x =
-                    Number(xMatch[1]);
+        for (const packet of packets) {
+
+            const cleanPacket = packet.trim();
+
+            if (cleanPacket === "") {
+                continue;
             }
 
-            if (yMatch) {
-                player.y =
-                    Number(yMatch[1]);
-            }
-
-
-            broadcast(
-                `<spawn id='${id}' x='${player.x}' y='${player.y}' />`,
-                ws
+            console.log(
+                `[${client.id}] ${cleanPacket}`
             );
 
-            return;
-        }
 
+            // ==================================================
+            // SPAWN
+            // ==================================================
 
-        // ----------------------------------------------
-        // MOVE
-        // ----------------------------------------------
+            if (cleanPacket.startsWith("<spawn")) {
 
-        if (
-            data.indexOf("<move") === 0
-        ) {
+                const x =
+                    getAttribute(cleanPacket, "x");
 
-            const xMatch =
-                data.match(/x=['"]([^'"]+)['"]/);
+                const y =
+                    getAttribute(cleanPacket, "y");
 
-            const yMatch =
-                data.match(/y=['"]([^'"]+)['"]/);
+                if (x !== "" && y !== "") {
 
+                    client.x = Number(x);
+                    client.y = Number(y);
 
-            if (xMatch) {
-                player.x =
-                    Number(xMatch[1]);
+                    broadcastExcept(
+                        client,
+                        `<spawn id='${client.id}' x='${client.x}' y='${client.y}' />`
+                    );
+                }
+
+                continue;
             }
 
-            if (yMatch) {
-                player.y =
-                    Number(yMatch[1]);
+
+            // ==================================================
+            // MOVE
+            // ==================================================
+
+            if (cleanPacket.startsWith("<move")) {
+
+                const x =
+                    getAttribute(cleanPacket, "x");
+
+                const y =
+                    getAttribute(cleanPacket, "y");
+
+                if (x !== "" && y !== "") {
+
+                    client.x = Number(x);
+                    client.y = Number(y);
+
+                    broadcastExcept(
+                        client,
+                        `<move id='${client.id}' x='${client.x}' y='${client.y}' />`
+                    );
+                }
+
+                continue;
             }
-
-
-            broadcast(
-                `<move id='${id}' x='${player.x}' y='${player.y}' />`,
-                ws
-            );
-
-            return;
         }
-
     });
 
 
-    // ==================================================
-    // DISCONNECTED
-    // ==================================================
+    // ========================================================
+    // DISCONNECT
+    // ========================================================
+
+    socket.on("close", () => {
+
+        removeClient(client);
+
+        console.log(
+            `[TCP] Player disconnected: ${client.id}`
+        );
+
+        broadcast(
+            `<leave id='${client.id}' />`
+        );
+    });
+
+
+    socket.on("end", () => {
+
+        removeClient(client);
+
+        console.log(
+            `[TCP] Player ended: ${client.id}`
+        );
+
+        broadcast(
+            `<leave id='${client.id}' />`
+        );
+    });
+
+
+    socket.on("error", (err) => {
+
+        console.log(
+            `[TCP] ${client.id} error: ${err.message}`
+        );
+
+        removeClient(client);
+    });
+});
+
+
+// ============================================================
+// START TCP SERVER
+// ============================================================
+
+tcpServer.listen(
+    TCP_PORT,
+    "127.0.0.1",
+    () => {
+
+        console.log(
+            `[TCP] Internal multiplayer server listening on ${TCP_PORT}`
+        );
+    }
+);
+
+
+// ============================================================
+// WEBSOCKET PROXY
+//
+// Ruffle connects here using socketProxy.
+// The WebSocket is simply bridged to the TCP server.
+// ============================================================
+
+const wss = new WebSocketServer({
+    server: httpServer
+});
+
+wss.on("connection", (ws) => {
+
+    console.log(
+        "[WS] Ruffle socket connected"
+    );
+
+    const tcp = net.createConnection({
+        host: "127.0.0.1",
+        port: TCP_PORT
+    });
+
+
+    // ========================================================
+    // TCP -> WEBSOCKET
+    // ========================================================
+
+    tcp.on("data", (data) => {
+
+        if (ws.readyState === ws.OPEN) {
+
+            ws.send(data);
+
+        }
+    });
+
+
+    // ========================================================
+    // WEBSOCKET -> TCP
+    // ========================================================
+
+    ws.on("message", (data) => {
+
+        if (tcp.writable) {
+
+            tcp.write(
+                Buffer.from(data)
+            );
+        }
+    });
+
+
+    // ========================================================
+    // CLOSE
+    // ========================================================
 
     ws.on("close", () => {
 
         console.log(
-            "PLAYER DISCONNECTED:",
-            id
+            "[WS] Ruffle disconnected"
         );
 
-        players.delete(ws);
-
-        broadcast(
-            `<leave id='${id}' />`
-        );
+        tcp.destroy();
     });
 
 
-    ws.on("error", (error) => {
+    ws.on("error", (err) => {
 
         console.log(
-            "WebSocket error:",
-            error.message
+            `[WS] Error: ${err.message}`
         );
 
+        tcp.destroy();
     });
 
+
+    tcp.on("error", (err) => {
+
+        console.log(
+            `[Proxy] TCP error: ${err.message}`
+        );
+
+        try {
+            ws.close();
+        } catch (e) {}
+    });
+
+
+    tcp.on("close", () => {
+
+        try {
+            ws.close();
+        } catch (e) {}
+    });
 });
 
 
-// ==================================================
-// START
-// ==================================================
+// ============================================================
+// START PUBLIC RENDER SERVER
+// ============================================================
 
-server.listen(
+httpServer.listen(
     PORT,
     "0.0.0.0",
     () => {
 
         console.log(
-            "Hoops & Yoyo server listening on port " +
-            PORT
+            `Hoops & Yoyo server listening on ${PORT}`
         );
 
     }
 );
+
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+function sendPacket(socket, packet) {
+
+    if (!socket.destroyed) {
+
+        socket.write(
+            packet + "\0"
+        );
+
+        console.log(
+            `[SEND] ${packet}`
+        );
+    }
+}
+
+
+function broadcast(packet) {
+
+    for (const client of tcpClients) {
+
+        sendPacket(
+            client.socket,
+            packet
+        );
+    }
+}
+
+
+function broadcastExcept(except, packet) {
+
+    for (const client of tcpClients) {
+
+        if (client === except) {
+            continue;
+        }
+
+        sendPacket(
+            client.socket,
+            packet
+        );
+    }
+}
+
+
+function removeClient(client) {
+
+    const index =
+        tcpClients.indexOf(client);
+
+    if (index !== -1) {
+
+        tcpClients.splice(
+            index,
+            1
+        );
+    }
+}
+
+
+function getAttribute(text, attribute) {
+
+    let search =
+        attribute + "='";
+
+    let start =
+        text.indexOf(search);
+
+    if (start >= 0) {
+
+        start += search.length;
+
+        const end =
+            text.indexOf("'", start);
+
+        if (end >= 0) {
+
+            return text.substring(
+                start,
+                end
+            );
+        }
+    }
+
+
+    // Double quotes.
+
+    search =
+        attribute + '="';
+
+    start =
+        text.indexOf(search);
+
+    if (start >= 0) {
+
+        start += search.length;
+
+        const end =
+            text.indexOf('"', start);
+
+        if (end >= 0) {
+
+            return text.substring(
+                start,
+                end
+            );
+        }
+    }
+
+
+    return "";
+}
